@@ -1,0 +1,9 @@
+[submodule "MOWSOCKET"]
+	path = MOWSOCKET
+	url = https://github.com/keremozgen/MOWSOCKET.git
+[submodule "MOWTHREAD"]
+	path = MOWTHREAD
+	url = https://github.com/keremozgen/MOWTHREAD.git
+[submodule "MOWFILE"]
+	path = MOWFILE
+	url = https://github.com/keremozgen/MOWFILE.git
