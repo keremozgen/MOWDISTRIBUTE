@@ -7,3 +7,6 @@
 [submodule "MOWFILE"]
 	path = MOWFILE
 	url = https://github.com/keremozgen/MOWFILE.git
+[submodule "xxHash"]
+	path = xxHash
+	url = https://github.com/Cyan4973/xxHash.git
