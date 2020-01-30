@@ -1,8 +1,44 @@
 #include "MOWSOCKET/mowsocket.h"
 #include "MOWFILE/mowfile.h"
 #include "MOWTHREAD/mowthread.h"
-#if (AES == 1)
-#include "meow_hash/meow_hash_x64_aesni.h"
+#define XXH_INLINE_ALL
+#define XXH_IMPORT
+#define XXH_STATIC_LINKING_ONLY
+#define XXH_PRIVATE_API
+#include "xxHash/xxhash.h"
+
+#ifdef _WIN32
+#include <process.h>
+#endif
+/*
+
+XXH_INLINE_ALL : Make all functions inline, with bodies directly included within xxhash.h. Inlining functions is beneficial for speed on small keys. It's extremely effective when key length is expressed as a compile time constant, with performance improvements observed in the +200% range . See this article for details. Note: there is no need for an xxhash.o object file in this case.
+XXH_REROLL : reduce size of generated code. Impact on performance vary, depending on platform and algorithm.
+XXH_ACCEPT_NULL_INPUT_POINTER : if set to 1, when input is a NULL pointer, xxhash result is the same as a zero-length input (instead of a dereference segfault). Adds one branch at the beginning of the hash.
+XXH_FORCE_MEMORY_ACCESS : default method 0 uses a portable memcpy() notation. Method 1 uses a gcc-specific packed attribute, which can provide better performance for some targets. Method 2 forces unaligned reads, which is not standard compliant, but might sometimes be the only way to extract better read performance.
+XXH_CPU_LITTLE_ENDIAN : by default, endianess is determined at compile time. It's possible to skip auto-detection and force format to little-endian, by setting this macro to 1. Setting it to 0 forces big-endian.
+XXH_PRIVATE_API : same impact as XXH_INLINE_ALL. Name underlines that XXH_* symbols will not be published.
+XXH_NAMESPACE : prefix all symbols with the value of XXH_NAMESPACE. Useful to evade symbol naming collisions, in case of multiple inclusions of xxHash source code. Client applications can still use regular function name, symbols are automatically translated through xxhash.h.
+XXH_STATIC_LINKING_ONLY : gives access to state declaration for static allocation. Incompatible with dynamic linking, due to risks of ABI changes.
+XXH_NO_LONG_LONG : removes support for XXH64, for targets without 64-bit support.
+XXH_IMPORT : MSVC specific : should only be defined for dynamic linking, it prevents linkage errors.
+
+*/
+
+//IF ANDROID INCLUDE ANDROID ONLY LIBRARIES
+#if defined(__ANDROID__) && !defined(ANDROIDPRINT)
+#define ANDROIDPRINT
+#include <jni.h>
+#include <android/log.h>
+#include "android/android_native_app_glue.h"
+#endif
+#if defined(__ANDROID__)
+#include <stdio.h>
+#include <dlfcn.h>
+char* android_native_lib_loc = NULL;
+int android_tmp_val = 0;
+#define MOW_SKIP_HASH 1
+#define printf(...) __android_log_print(ANDROID_LOG_DEBUG, "MOW", __VA_ARGS__);
 #endif
 
 //GENERAL DEFINES HERE
@@ -12,7 +48,7 @@
 #define MD_GET 2		//FIND GOOD NAMES
 #define MD_DISTRIBUTE 3	//FIND GOOD NAMES
 
-#define MOWBROADCASTPORT 8888
+#define MOWBROADCASTPORT 8998
 #define MOWDISTRIBUTEPORT 9999
 
 //GENERAL DEBUG DEFINES HERE
@@ -38,7 +74,9 @@ struct mdBroadcast {
 	uint16_t broadcast_interval_ms;
 	int action;
 	char* update_location;
+	char* android_lib_location;
 	uint64_t waiting_limit_seconds;
+	void* android_app_struct_ptr;
 };
 
 //DEFINE MOWDISTRIBUTE FUNCTIONS HERE
@@ -53,7 +91,37 @@ int md_send_folder_recursively(struct mowfolder* folder, struct mowsocket** sock
 
 int md_get_folder(int64_t socketd, char* loocation);
 
+int md_update_lib(void *android_app_str);	//FOR ANDROID
+
 //IMPLEMENT MOWDISTRIBUTE FUNCTIONS HERE
+
+int md_update_lib(void *android_app_str) {
+#ifdef __ANDROID__
+	if (NULL == android_app_str) return MOWDISTRIBUTERR;
+	struct android_app* and_app = (struct android_app*) android_app_str;
+	char* lib = "/data/data/org.fips.mowdistribute/files/libmowdistribute.so";
+	void* myso = dlopen(lib, RTLD_NOW | RTLD_NODELETE | RTLD_LOCAL);
+	if (NULL == myso) return MOWDISTRIBUTERR;
+	int* android_tmp_val_ptr = (int*)dlsym(myso, "android_tmp_val");
+	char* dl_err_str = NULL;
+	(*android_tmp_val_ptr) = android_tmp_val + 1;
+	dl_err_str = dlerror();
+	if (dl_err_str)
+		printf("dlsym %s %s %d\n", dl_err_str, __FILE__, __LINE__);
+	void (*fun_ptr)(struct android_app*) = dlsym(myso, "android_main");
+	dl_err_str = dlerror();
+	if (dl_err_str)
+		printf("dlsym %s %s %d\n", dl_err_str, __FILE__, __LINE__);
+	dlclose(myso);
+	dl_err_str = dlerror();
+	if (dl_err_str)
+		printf("dlclose %s %s %d\n", dl_err_str, __FILE__, __LINE__);
+	printf("Running the new lib\n");
+	fun_ptr(and_app);
+	return MOWDISTRIBUTEOK;
+#endif
+	return MOWDISTRIBUTERR;
+}
 
 unsigned int compare_ip_with_uint32_t_p(uint32_t address_ho, uint32_t* address_p) {
 	if (NULL == address_p) {
@@ -155,17 +223,6 @@ int md_get_folder(int64_t socketd, char* location) {
 	printf("md_get_folder returning\n");
 }
 
-#if (AES == 1)
-static void
-PrintHash(meow_u128 Hash)
-{
-	printf("    %08X-%08X-%08X-%08X\n",
-		MeowU32From(Hash, 3),
-		MeowU32From(Hash, 2),
-		MeowU32From(Hash, 1),
-		MeowU32From(Hash, 0));
-}
-#endif
 
 int md_send_folder_recursively(struct mowfolder* folder, struct mowsocket** sockets, uint32_t socket_count) {
 	if (NULL == folder || NULL == sockets || 0 == socket_count) {
@@ -200,14 +257,9 @@ int md_send_folder_recursively(struct mowfolder* folder, struct mowsocket** sock
 	for (uint64_t i = 0; i < folder->file_count; i++)
 	{
 		//GET THE FILE HASH
-
-#if (AES == 1)
-		meow_u128 fileHash = MeowHash(MeowDefaultSeed, folder->files[i]->content_length, folder->files[i]->content);
-		PrintHash(fileHash);
-#endif
-
-		for (uint32_t j = 0; j < socket_count; j++)
-		{
+		XXH128_hash_t hash = { 0 };
+		XXH128_hash_t peer_hash = { 0 };
+		for (uint32_t j = 0; j < socket_count; j++) {
 			char file_info = 1; uint64_t tmp64_t;
 			if (1 != msends(sockets[j], &file_info, sizeof(char))) {
 				printf("Sending file info failed.%s %d\n", __FILE__, __LINE__);
@@ -224,9 +276,43 @@ int md_send_folder_recursively(struct mowfolder* folder, struct mowsocket** sock
 			if (sizeof(folder->files[i]->content_length) != msends(sockets[j], &tmp64_t, sizeof(tmp64_t))) {
 				printf("Sending file content length failed.%s %d\n", __FILE__, __LINE__);
 			}
-			if (folder->files[i]->content_length != msends(sockets[j], folder->files[i]->content, folder->files[i]->content_length)) {
+			//GET THE INFO OF HASH
+			if (16 != mrecv_fill(sockets[j]->socketd, &peer_hash, 16)) {
+				printf("Can't get peer hash\n");
+			}
+			else {
+				peer_hash.high64 = ntoh64_t(peer_hash.high64);
+				peer_hash.low64 = ntoh64_t(peer_hash.low64);
+				if (peer_hash.low64 == 0 && peer_hash.high64 == 0) {	//NO NEED FOR HASH CALCULATION
+					goto MD_SEND_RECURSIVELY_SEND_FILE_INFO_4;
+				}
+				else {
+					if (hash.high64 == 0 && hash.low64 == 0) {
+						hash = XXH128(folder->files[i]->content, folder->files[i]->content_length, 13);
+					}
+				}
+				if (1 == XXH128_isEqual(peer_hash, hash)) {	//IF HASHES ARE EQUAL THAN SEND SKIP INFO
+					file_info = 3;
+					if (sizeof(file_info) != msends(sockets[j], &file_info, sizeof(file_info))) {
+						printf("Sending file info for skip failed.%s %d\n", __FILE__, __LINE__);
+					}
+					goto MD_SEND_FOLDER_RECURSIVELY_NEXT_SOCKET;
+				}
+				else {
+				MD_SEND_RECURSIVELY_SEND_FILE_INFO_4:
+					file_info = 4;
+					if (sizeof(file_info) != msends(sockets[j], &file_info, sizeof(file_info))) {
+						printf("Sending file info after hash comparison failed.%s %d\n", __FILE__, __LINE__);
+					}
+				}
+			}
+			if (folder->files[i]->content_length != msends(sockets[j], folder->files[i]->content, folder->files[i]->content_length)) {	//todo(kerem): HANDLE SENDING 0 CONTENT LENGTH FOR EMPTY FILES
 				printf("Sending file content failed.%s %d\n", __FILE__, __LINE__);
 			}
+			else {
+				printf("%s address %s file\n", ho_addr_to_str(sockets[j]->h_address), folder->files[i]->file_name);
+			}
+		MD_SEND_FOLDER_RECURSIVELY_NEXT_SOCKET:;
 		}
 	}
 	for (uint64_t k = 0; k < folder->folder_count; k++)
@@ -289,8 +375,7 @@ int md_get_update(struct mdBroadcast* bs) {
 		struct mowadapter* tadapter = cleanAdapters;
 		for (int i = 0; i < adapter_count; i++)
 		{
-			bsockets[i] = msocket(MOW_IP4, MOW_UDP, MOW_LISTEN, tadapter->h_broadcast, MOWBROADCASTPORT);
-
+			bsockets[i] = msocket(MOW_IP4, MOW_UDP, MOW_LISTEN, tadapter->h_address, MOWBROADCASTPORT);
 			if (NULL == bsockets[i]) {
 				printf("md_get_update can't create socket %s %d\n", __FILE__, __LINE__);
 				goto MD_GET_UPDATE_RETURN;
@@ -313,7 +398,7 @@ int md_get_update(struct mdBroadcast* bs) {
 	uint32_t* ip_list = NULL;
 	uint32_t ip_list_size = 0;
 	int64_t left_time_millis = bs->waiting_limit_seconds * 1000;
-	while (stored_cond == ((NULL == bs->cond) ? stored_cond : *bs->cond)) {
+	while ((stored_cond == ((NULL == bs->cond) ? stored_cond : *bs->cond)) && ((bs->waiting_limit_seconds > 0) ? (left_time_millis > 0) : 1)) {
 		message_buf = (char*)calloc(bs->message_len + 1, sizeof(char));
 		if (NULL == message_buf) {
 			printf("md_get_update can't allocate memory\n");
@@ -344,12 +429,22 @@ int md_get_update(struct mdBroadcast* bs) {
 				if (send_r != bs->message_len + 1) {
 					printf("md_get_update %llu bytes sent of %lu %s adapter\n", send_r, bs->message_len + 1, ho_addr_to_str(cleanAdapters[i].h_address));
 				}
+				//BECAUSE OUR MULTICAST LOCK ON ANDROID DOES NOT WORK WE CAN SEND MESSAGE ALSO TO THE IP ADDRESS FOR ANDROID DEVICE TO GET OUR MESSAGE
+				for (uint32_t ipt = 0; ipt < ip_list_size; ipt++)
+				{
+					if ((ip_list[ipt] | ~(tadapter->h_netmask)) == tadapter->h_broadcast) {
+						send_r = msendto(bsockets[i]->socketd, distributor_msg, bs->message_len + 1, ip_list[ipt], MOWBROADCASTPORT);
+						printf("Sent to ANDROID %s\n", ho_addr_to_str(ip_list[ipt]));
+						if (send_r != bs->message_len + 1) {
+							printf("md_get_update %llu bytes sent of %lu %s adapter\n", send_r, bs->message_len + 1, ho_addr_to_str(cleanAdapters[i].h_address));
+						}
+					}
+				}
 				tadapter = tadapter->next;
 			}
 			free(distributor_msg);
 		}
 		uint64_t delta = 0;
-		double interval = 0.0f;
 		uint16_t elapsed_time = 0;
 		while (elapsed_time < bs->broadcast_interval_ms) {
 			for (int i = 0; i < adapter_count; i++)
@@ -359,6 +454,7 @@ int md_get_update(struct mdBroadcast* bs) {
 					uint32_t peer_addr_ho = 0;
 					uint16_t peer_port_ho = 0;
 					uint64_t rnb = mrecvfrom(bsockets[i]->socketd, message_buf, bs->message_len + 1, &peer_addr_ho, &peer_port_ho);
+					//printf("Message from %s %d\n", ho_addr_to_str(peer_addr_ho), peer_port_ho);
 					if (rnb)
 						if (0 == compare_ip_with_adapters(peer_addr_ho, tmpAdapters) && 0 != peer_addr_ho) {
 							if (0 == rnb) {
@@ -368,7 +464,7 @@ int md_get_update(struct mdBroadcast* bs) {
 								if (0 == compare_ip_with_uint32_t_p(peer_addr_ho, ip_list)) {
 									//UPDATE THE LIST
 									ip_list_size++;
-									uint32_t* tp = (uint32_t*)realloc(ip_list, sizeof(uint32_t) * ip_list_size + 1);
+									uint32_t* tp = (uint32_t*)realloc(ip_list, sizeof(uint32_t) * (ip_list_size + 1));
 									if (NULL == tp) {
 										printf("md_get_update can't allocate memory %s %d\n", __FILE__, __LINE__);
 										free(ip_list);
@@ -395,7 +491,6 @@ int md_get_update(struct mdBroadcast* bs) {
 				time_a = mprecise_time_of_day_ns();
 				delta = time_a - time_b;
 				delta /= 1000000;
-				interval = (double)((double)((double)bs->broadcast_interval_ms - (double)delta) / (double)adapter_count);
 				elapsed_time += (uint16_t)delta;
 				if (bs->waiting_limit_seconds) left_time_millis -= delta;
 			}
@@ -484,6 +579,7 @@ MD_GET_UPDATE_ACTION:
 			memcpy(t_abs_update_location, md_before_wd, md_before_wd_length);
 			t_abs_update_location[md_before_wd_length] = M_OS_DELIMITER_CHAR;
 			memcpy(t_abs_update_location + md_before_wd_length + 1, bs->update_location, update_location_length);
+			m_path_conv_compat(t_abs_update_location);
 			printf("%s changing path to\n", t_abs_update_location);
 			if (MOWFILEERR == m_set_current_dir(t_abs_update_location)) {
 				printf("Can't change directory to %s\n", t_abs_update_location);
@@ -499,9 +595,63 @@ MD_GET_UPDATE_ACTION:
 		char* abs_folder_path = NULL;
 		while (1) {
 			//FIRST GET THE INFO TO DETERMINE FOLDER OR FILE
-			recv_len = mrecv(r, &info, sizeof(char));
+			recv_len = mrecv_fill(r, &info, sizeof(char));
 			if (0 == info) {
 				printf("Distributor closing\n");
+#ifdef __ANDROID__
+				char android_lib_info = 5;
+				if (sizeof(android_lib_info) != msend(r, &android_lib_info, sizeof(android_lib_info))) {
+					printf("Can't send android_lib_info\n");	//HANDLE ERROR
+				}
+				struct mowfile* lib = calloc(sizeof(struct mowfile), 1);
+				if (NULL == lib) {
+
+				}
+				uint64_t lib_name_len, lib_content_len;
+				if (sizeof(lib_name_len) != mrecv_fill(r, &lib_name_len, sizeof(lib_name_len))) {
+
+				}
+				lib_name_len = ntoh64_t(lib_name_len);
+				lib->name_length = lib_name_len;
+				lib->file_name = (char*)calloc(lib_name_len + 1, sizeof(char));
+				if (NULL == lib->file_name) {	//todo(kerem): HANDLE ERROR CONDITIONS
+					printf("Can't allocate memory %s %d\n", __FILE__, __LINE__);
+				}
+				if (lib_name_len != mrecv_fill(r, lib->file_name, lib_name_len)) {
+					printf("Can't receive %s %d\n", __FILE__, __LINE__);
+				}
+				if (sizeof(lib_content_len) != mrecv_fill(r, &lib_content_len, sizeof(lib_content_len))) {
+					printf("Can't receive %s %d\n", __FILE__, __LINE__);
+				}
+				lib_content_len = ntoh64_t(lib_content_len);
+				lib->content_length = lib_content_len;
+				lib->content = (char*)calloc(lib_content_len + 1, sizeof(char));
+				if (NULL == lib->content) {
+					printf("Can't allocate memory %s %d\n", __FILE__, __LINE__);
+				}
+				if (lib_content_len != mrecv_fill(r, lib->content, lib_content_len)) {
+					printf("Can't receive %s %d\n", __FILE__, __LINE__);
+				}
+				//GET THIS FROM /proc/self/cmdline
+				//FIRST REMOVE THE EXISTING ONE IN THE /files directory
+				printf("%d returned deleting the lib\n", system("rm /data/data/org.fips.mowdistribute/files/libmowdistribute.so"));
+				if (MOWFILEERR == m_write_file("/data/data/org.fips.mowdistribute/files", lib)) {
+					printf("Can't write native lib to %s location\n", "/data/data/org.fips.mowdistribute/files"/*android_native_lib_loc*/);
+				}
+				else {
+					if (MOWSOCKETERR == mshutdown(r, MCLOSE_BOTH)) {	//CLOSE READ(receive) OPERATION
+						printf("Closing connection with %s address error occured\n", ho_addr_to_str(ip_list[0]));
+					}
+					mclose(&distributor_connection);
+
+					if (MOWDISTRIBUTERR == md_update_lib(bs->android_app_struct_ptr)) {
+						printf("Error md_update_lib %s %d\n", __FILE__, __LINE__);
+					}
+					else {
+						printf("%d lib returned\n", android_tmp_val);
+					}
+				}
+#endif
 				if (MOWSOCKETERR == mshutdown(r, MCLOSE_BOTH)) {	//CLOSE READ(receive) OPERATION
 					printf("Closing connection with %s address error occured\n", ho_addr_to_str(ip_list[0]));
 				}
@@ -511,39 +661,40 @@ MD_GET_UPDATE_ACTION:
 			if (sizeof(info) != recv_len) {
 				printf("Getting info returned %llu\n", recv_len);
 				//HANDLE
-			}
-			if (0 == info) {
-				printf("All files are taken from distributor\n");
-				break;
-			}
+	}
 			uint64_t tmp_val = 0;
-			recv_len = mrecv(r, &tmp_val, sizeof(tmp_val));
+			recv_len = mrecv_fill(r, &tmp_val, sizeof(tmp_val));
 			if (sizeof(tmp_val) != recv_len) {
 				printf("Getting value returned %llu\n", tmp_val);
 				//HANDLE
 			}
 			tmp_val = ntoh64_t(tmp_val);
-			char* t_name = (char*)calloc(tmp_val + 1, sizeof(char));
+			char* t_name = (char*)calloc(tmp_val + 1, sizeof(char));	//todo(kerem): HANDLE THIS TEMPORARY FIX //HANDLED?
 			if (NULL == t_name) {
 				printf("Can't allocate memory for name\n");
 				//HANDLE
 			}
-			recv_len = mrecv(r, t_name, tmp_val);
+			recv_len = mrecv_fill(r, t_name, tmp_val);
 			if (tmp_val != recv_len) {
 				printf("Getting name returned %llu of %llu\n", recv_len, tmp_val);
 				//HANDLE
 			}
 			if (2 == info) {
 				if (NULL == distributor_main_folder_path) {
-					distributor_main_folder_path = t_name;
-					distributor_main_folder_path_length = strlen(distributor_main_folder_path);
+					distributor_main_folder_path_length = strlen(t_name);
+					distributor_main_folder_path = (char*)calloc(distributor_main_folder_path_length + 1, sizeof(char));
+					if (NULL == distributor_main_folder_path) {
+						printf("%s %d can't allcate memory\n");	//HANDLE ERROR
+					}
+					memcpy(distributor_main_folder_path, t_name, distributor_main_folder_path_length);
 					if (tmp_val != distributor_main_folder_path_length) {	//todo(kerem): Handle error
 						printf("Error on distributor main_folder_path length. Should be %llu but %llu\n", tmp_val, distributor_main_folder_path_length);
 					}
 				}
 				relative_folder_path = t_name + distributor_main_folder_path_length + 1;	//+1 FOR FILE DELIMITER
 				if (abs_folder_path) free(abs_folder_path);
-				abs_folder_path = (char*)calloc(strlen(relative_folder_path) + 1 + ((t_abs_update_location) ? strlen(t_abs_update_location) : strlen(bs->update_location)), sizeof(char));
+				//HANDLE THIS TEMPORARY FIXED ALLOCATION
+				abs_folder_path = (char*)calloc(strlen(relative_folder_path) + 2 + ((t_abs_update_location) ? strlen(t_abs_update_location) : strlen(bs->update_location)), sizeof(char)); //todo(kerem): HANDLE THIS TEMPORARY FIX //HANDLED?
 				if (NULL == abs_folder_path) {	//todo(kerem): HANDLE ERROR
 
 				}
@@ -551,12 +702,11 @@ MD_GET_UPDATE_ACTION:
 				abs_folder_path[((t_abs_update_location) ? strlen(t_abs_update_location) : strlen(bs->update_location))] = M_OS_DELIMITER_CHAR;
 				memcpy(abs_folder_path + 1 + ((t_abs_update_location) ? strlen(t_abs_update_location) : strlen(bs->update_location)), relative_folder_path, strlen(relative_folder_path));
 				m_path_conv_compat(abs_folder_path);
+				if (abs_folder_path[strlen(abs_folder_path) - 1] != M_OS_DELIMITER_CHAR)
+					abs_folder_path[strlen(abs_folder_path)] = M_OS_DELIMITER_CHAR;
 				if (MOWFILEERR == m_dir_exist(abs_folder_path)) {
 					if (MOWFILEERR == m_create_dir(abs_folder_path)) {
 						printf("Can't create %s folder\n", abs_folder_path);
-					}
-					else {
-						printf("%s folder created\n", abs_folder_path);
 					}
 				}
 			}
@@ -568,9 +718,84 @@ MD_GET_UPDATE_ACTION:
 					//HANDLE
 				}
 				content_len = ntoh64_t(content_len);
+				char* current_file_abs_name = (char*)calloc(strlen(abs_folder_path) + strlen(t_name) + 2, sizeof(char));
+				if (NULL == current_file_abs_name) {
+					//todo(kerem): Handle
+					printf("%s %d can't allocate memory\n", __FILE__, __LINE__);
+				}
+				memcpy(current_file_abs_name, abs_folder_path, strlen(abs_folder_path));
+				memcpy(current_file_abs_name + strlen(abs_folder_path), t_name, strlen(t_name));
+				struct mowfile* current_file = m_read_file(current_file_abs_name);
+				free(current_file_abs_name);
+				char file_info_hash[16] = { 0 };	//16BYTES FOR HASH (128)/8
+				//IF FILE DOES NOT EXIST OR CONTENT LENGTHS DONT MATCH WE ARE SURE THE FILES ARE DIFFERENT
+				if (NULL == current_file || current_file->content_length != content_len) {
+					if (16 != msend(r, file_info_hash, 16)) {
+						printf("Can't send file_info_hash\n");	//HANDLE ERROR
+					}
+					if (NULL != current_file && current_file->content_length != content_len) {
+						current_file->content_length = content_len;
+						char* t_content = (char*)realloc(current_file->content, (content_len + 1) * sizeof(char));
+						if (NULL == t_content) {
+							printf("Can't realloc %s %d\n", __FILE__, __LINE__);
+						}
+						else {
+							current_file->content = t_content;
+							current_file->content[content_len] = 0;
+							goto MD_GET_UPDATE_AFTER_HASH;
+						}
+					}
+					goto MD_GET_UPDATE_FILE_DOES_NOT_EXIST;
+				}
+				if (NULL != current_file) {//CAN CHECK THE HASH VALUES BUT WE ARE SURE THAT SIZES ARE SAME
+					//CALCULATE THE HASH OF THE FILE CONTENT AND SEND HASH VALUE
+					XXH128_hash_t hash = { 0 };
+#if (MOW_SKIP_HASH == 0)
+					XXH128(current_file->content, current_file->content_length, 13);
+#endif
+					hash.high64 = hton64_t(hash.high64);
+					hash.low64 = hton64_t(hash.low64);
+					memcpy(file_info_hash, &hash, 16);
+					if (16 != msend(r, file_info_hash, 16)) {
+						printf("Can't send file_info_hash\n");	//HANDLE ERROR
+					}
+				MD_GET_UPDATE_AFTER_HASH:
+					recv_len = mrecv_fill(r, &info, sizeof(char));
+					if (sizeof(info) != recv_len) {
+						printf("Getting info returned %llu\n", recv_len);
+						//HANDLE
+					}
+					if (3 == info) {	//HASH AND CONTENT LENGTH ARE SAME SKIP
+						m_free_file(current_file);	//HANDLE RETURN VALUE
+						goto MD_GET_UPDATE_NEXT;
+					}
+					else if (4 == info) {	//VALUES ARE NOT THE SAME GET THE NEW CONTENT
+						recv_len = mrecv_fill(r, current_file->content, content_len);
+						if (content_len != recv_len) {
+							printf("Getting content returned %llu of %llu\n", recv_len, content_len);
+							//HANDLE
+						}
+						if (MOWFILEERR == m_write_file(abs_folder_path, current_file)) {
+							printf("Can't write the file %s\n", current_file->file_name);
+						}
+						else {
+							printf("%s file written\n", current_file->file_name);
+						}
+						goto MD_GET_UPDATE_NEXT;
+					}
+					else {
+						printf("Unknown option sent by distributor\n");	//todo(kerem): HANDLE ERROR
+					}
+				}
+			MD_GET_UPDATE_FILE_DOES_NOT_EXIST:;
 				char* content = (char*)calloc(content_len + 1, sizeof(char));
 				if (NULL == content) {
 					printf("Can't allocate memory for content\n");
+					//HANDLE
+				}
+				recv_len = mrecv_fill(r, &info, sizeof(char));
+				if (sizeof(info) != recv_len && 4 != info) {
+					printf("Getting info ERROR\n");
 					//HANDLE
 				}
 				recv_len = mrecv_fill(r, content, content_len);
@@ -584,10 +809,10 @@ MD_GET_UPDATE_ACTION:
 				wfile.name_length = tmp_val;
 				wfile.content_length = content_len;
 				wfile.content = content;
-#if (AES == 1)
-				meow_u128 fileHash = MeowHash(MeowDefaultSeed, content_len, content);
-				PrintHash(fileHash);
-#endif
+
+				uint64_t nbcontent_len = hton64_t(content_len);
+				printf("%s file name\n", t_name);
+
 				if (MOWFILEERR == m_write_file(abs_folder_path, &wfile)) {
 					printf("Can't create %s path %s file\n", abs_folder_path, t_name);
 				}
@@ -597,9 +822,11 @@ MD_GET_UPDATE_ACTION:
 				//HANDLE
 			}
 
-
+		MD_GET_UPDATE_NEXT:
 			free(t_name);
-		}
+}
+		if (distributor_main_folder_path) free(distributor_main_folder_path);
+		distributor_main_folder_path_length = 0;
 		if (abs_folder_path) free(abs_folder_path);
 		if (t_abs_update_location) free(t_abs_update_location);
 		mclose(&distributor_connection);
@@ -609,8 +836,10 @@ MD_GET_UPDATE_ACTION:
 			if (MOWFILEERR == m_set_current_dir(md_before_wd)) {
 				printf("Can't change directory back to %s\n", md_before_wd);
 			}
+			free(md_before_wd);
 		}
 		else printf("Can't change directory back\n");
+
 	}
 	else {
 		for (int i = 0; i < adapter_count; i++)
@@ -626,6 +855,7 @@ MD_GET_UPDATE_ACTION:
 		}
 		//READ THE WANTED FOLDER
 		struct mowfolder* parrent_folder = m_read_folder(bs->update_location);
+		struct mowfile* android_lib = NULL;
 		if (NULL == parrent_folder) {
 			printf("md_get_update can't read update location\n");
 			goto MD_GET_UPDATE_RETURN;
@@ -673,12 +903,43 @@ MD_GET_UPDATE_ACTION:
 			for (uint32_t i = 0; i < ip_list_size; i++)
 			{
 				char finished_info = 0;
-				if (1 != mrecv(peer_connections[i]->socketd, &finished_info, sizeof(finished_info))) {
-					if (0 != finished_info) {
-						printf("Peer %s is not responding normally to close\n", ho_addr_to_str(ip_list[i]));
+				if (sizeof(finished_info) == mrecv(peer_connections[i]->socketd, &finished_info, sizeof(finished_info))) {
+					if (0 == finished_info) {
+						printf("%s acked the close\n", ho_addr_to_str(ip_list[i]));
+
+					}
+					else if (5 == finished_info && NULL != bs->android_lib_location) {
+						//CAN JUST COMPILE FOR ARM FOR NOW LATER IMPLEMENT THIS DIFFERENTLY
+						if (NULL == android_lib) {
+							m_set_current_dir(bs->update_location);
+							if (0 != system("fips set config android-make-debug && fips build")) {	//todo(kerem): CHANGE
+								printf("Can't build android app\n");
+							}
+							android_lib = m_read_file(bs->android_lib_location);
+							if (NULL == android_lib) {
+								printf("Can't read android_lib\n");
+							}
+						}
+						if (NULL != android_lib) {
+							//SEND LIB
+							uint64_t len_no = hton64_t(android_lib->name_length);
+							if (sizeof(len_no) != msends(peer_connections[i], &len_no, sizeof(len_no))) {
+								printf("Can't send file name length %s address\n", ho_addr_to_str(ip_list[i]));
+							}
+							if (android_lib->name_length != msends(peer_connections[i], android_lib->file_name, android_lib->name_length)) {
+								printf("Can't send file name %s address\n", ho_addr_to_str(ip_list[i]));
+							}
+							len_no = hton64_t(android_lib->content_length);
+							if (sizeof(len_no) != msends(peer_connections[i], &len_no, sizeof(len_no))) {
+								printf("Can't send content length %s address\n", ho_addr_to_str(ip_list[i]));
+							}
+							if (android_lib->content_length != msends(peer_connections[i], android_lib->content, android_lib->content_length)) {
+								printf("Can't send content %s address\n", ho_addr_to_str(ip_list[i]));
+							}
+						}
 					}
 					else {
-						printf("%s acked the close\n", ho_addr_to_str(ip_list[i]));
+						printf("Peer %s is not responding normally to close\n", ho_addr_to_str(ip_list[i]));
 					}
 				}
 				if (MOWSOCKETERR == mclose_option(&peer_connections[i], MCLOSE_RECEIVE)) {	//CLOSE READ(receive) OPERATION
