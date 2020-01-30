@@ -434,7 +434,7 @@ int md_get_update(struct mdBroadcast* bs) {
 				{
 					if ((ip_list[ipt] | ~(tadapter->h_netmask)) == tadapter->h_broadcast) {
 						send_r = msendto(bsockets[i]->socketd, distributor_msg, bs->message_len + 1, ip_list[ipt], MOWBROADCASTPORT);
-						printf("Sent to ANDROID %s\n", ho_addr_to_str(ip_list[ipt]));
+						printf("Sent to %s\n", ho_addr_to_str(ip_list[ipt]));
 						if (send_r != bs->message_len + 1) {
 							printf("md_get_update %llu bytes sent of %lu %s adapter\n", send_r, bs->message_len + 1, ho_addr_to_str(cleanAdapters[i].h_address));
 						}
