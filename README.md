@@ -7,6 +7,7 @@ This library uses UDP broadcast for discovery, but on android you need to create
 There is a bug that we create this lock and acquire it but does not have any affects. But there is a workaround solution added inside header.
 
 Here is a quick intro:
+
 struct mdBroadcast {
 	char* message;	//THIS IS UNIQUE FOR YOUR APPLICATION. MAYBE CAN BE YOUR APPLICATION NAME AND ITS VERSION.
 	uint16_t message_len;
@@ -20,14 +21,14 @@ struct mdBroadcast {
 };
 You need to use this struct.
 
-int md_get_update(struct mdBroadcast* bs);
+	int md_get_update(struct mdBroadcast* bs);
 This function is same on both distributor and receiver application. You can call it as a thread. Returns when stopping conditions (timeout,
 *cond changes etc.).
 
-int md_send_folder_recursively(struct mowfolder* folder, struct mowsocket** sockets, uint32_t socket_count);
+	int md_send_folder_recursively(struct mowfolder* folder, struct mowsocket** sockets, uint32_t socket_count);
 You can send the project to receivers if you want them to store the project.
 There is a hash calculation (http://cyan4973.github.io/xxHash/) done for looking if content lengths are the same. So if length is not the same and
 file does not exists this step is skipped. If you don't want any hash calculations you can #define MOW_SKIP_HASH 1.
 
-int md_update_lib(void *android_app_str);
+	int md_update_lib(void *android_app_str);
 This function is for android application. It updates it's native library so you don't have to install the new apk from android studio.
