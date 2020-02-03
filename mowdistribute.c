@@ -385,7 +385,7 @@ int main(int argc, char* argv[]) {
 		printf("Running the binary\n");
 
 
-#if 0
+#if 1
 
 #ifdef _WIN32
 		fcloseall();
