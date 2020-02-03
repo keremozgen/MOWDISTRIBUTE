@@ -70,15 +70,15 @@ struct mdAvailable {
 };
 
 struct mdBroadcast {
-	char* message;
+	char* message;	//THIS IS UNIQUE FOR YOUR APPLICATION. MAYBE CAN BE YOUR APPLICATION NAME AND ITS VERSION.
 	uint16_t message_len;
-	volatile int* cond;
-	uint16_t broadcast_interval_ms;
-	int action;
-	char* update_location;
-	char* android_lib_location;
-	uint64_t waiting_limit_seconds;
-	void* android_app_struct_ptr;
+	volatile int* cond;	//YOU CAN STOP BROADCASTING WITH CHANGING THE VALUE OF POINTED VARIABLE.
+	uint16_t broadcast_interval_ms;	//INTERVAL BETWEEN MESSAGES.
+	int action;	//MD_GET OR MD_DISTRIBUTE
+	char* update_location;	//LOCATION OF THE PROJECT
+	char* android_lib_location;	//IF ANDROID APPLICATION WANTS AN UPDATED LIB THIS IS (libname).so
+	uint64_t waiting_limit_seconds;	//FOR A LIMITED TIME. 0 FOR UNLIMITED
+	void* android_app_struct_ptr;	//ON ANDROID THIS IS struct android_app*
 };
 
 //DEFINE MOWDISTRIBUTE FUNCTIONS HERE
@@ -90,8 +90,6 @@ unsigned int compare_ip_with_adapters(uint32_t address_ho, struct mowadapter* ad
 unsigned int compare_ip_with_uint32_t_p(uint32_t address_ho, uint32_t* address_p);
 
 int md_send_folder_recursively(struct mowfolder* folder, struct mowsocket** sockets, uint32_t socket_count);
-
-int md_get_folder(int64_t socketd, char* loocation);
 
 int md_update_lib(void *android_app_str);	//FOR ANDROID
 
@@ -150,81 +148,6 @@ unsigned int compare_ip_with_adapters(uint32_t address_ho, struct mowadapter* ad
 	}
 	return 0;
 }
-
-int md_get_folder(int64_t socketd, char* location) {
-	char info = 0;
-	uint64_t recv_nb = 1;
-	if (1 != mrecv(socketd, &info, sizeof(char))) {
-		printf("md_get_folder can't get folder info.%s %d\n", __FILE__, __LINE__);
-		return MOWDISTRIBUTERR;
-	}
-	if (1 != info) {
-		printf("md_get_folder distributor is not sending in order\n");
-		return MOWDISTRIBUTERR;
-	}
-	char* md_cwd = m_get_current_dir();
-	if (NULL == md_cwd) {
-		printf("md_get_folder can't get current folder\n");
-		return MOWDISTRIBUTERR;
-	}
-	if (MOWFILEERR == m_set_current_dir(location)) {
-		printf("md_get_folder can't set current directory\n");
-		return MOWDISTRIBUTERR;
-	}
-
-	while (0 < recv_nb) {
-		if (1 == recv_nb) {			//FILE OR FOLDER
-			if (1 == info) {		//FILE
-				uint64_t file_name_length = 0, file_content_length = 0;
-				if (sizeof(file_name_length) == mrecv(socketd, &file_name_length, sizeof(file_name_length)))
-				{
-					file_name_length = ntoh64_t(file_name_length);
-					char* file_name = (char*)calloc(file_name_length + 1, sizeof(char));
-					if (NULL == file_name) {
-
-					}
-					if (file_name_length != mrecv(socketd, file_name, file_name_length)) {
-
-					}
-				}
-				if (sizeof(file_content_length) == mrecv(socketd, &file_content_length, sizeof(file_content_length))) {
-					file_content_length = ntoh64_t(file_content_length);
-					char* file_content = (char*)calloc(file_content_length + 1, sizeof(char));
-					if (NULL == file_content) {
-
-					}
-					uint64_t content_length_received = mrecv_fill(socketd, file_content, file_content_length);
-					if (file_content_length != content_length_received) {
-						printf("File content length was expected %llu but %llu came instead\n", file_content_length, content_length_received);
-					}
-					printf("File content:\n%s\n", file_content);
-				}
-
-			}
-			else if (2 == info) {	//FOLDER
-				uint64_t folder_name_length = 0;
-				if (sizeof(folder_name_length) == mrecv(socketd, &folder_name_length, sizeof(folder_name_length))) {
-					folder_name_length = ntoh64_t(folder_name_length);
-					char* folder_name = (char*)calloc(folder_name_length + 1, sizeof(char));
-					if (NULL == folder_name) {
-
-					}
-					if (folder_name_length != mrecv(socketd, folder_name, folder_name_length)) {
-
-					}
-				}
-			}
-			else {					//UNEXPECTED
-				printf("Unexpected parameter from distributor\n");
-			}
-		}
-
-	}
-	m_set_current_dir(md_cwd);
-	free(md_cwd);
-	printf("md_get_folder returning\n");
-}
-
 
 int md_send_folder_recursively(struct mowfolder* folder, struct mowsocket** sockets, uint32_t socket_count) {
 	if (NULL == folder || NULL == sockets || 0 == socket_count) {
