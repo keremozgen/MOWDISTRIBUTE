@@ -8,7 +8,7 @@ There is a bug that we create this lock and acquire it but does not have any aff
 
 Here is a quick intro:
 
-struct mdBroadcast {
+	struct mdBroadcast {
 	char* message;	//THIS IS UNIQUE FOR YOUR APPLICATION. MAYBE CAN BE YOUR APPLICATION NAME AND ITS VERSION.
 	uint16_t message_len;
 	volatile int* cond;	//YOU CAN STOP BROADCASTING WITH CHANGING THE VALUE OF POINTED VARIABLE.
@@ -18,7 +18,7 @@ struct mdBroadcast {
 	char* android_lib_location;	//IF ANDROID APPLICATION WANTS AN UPDATED LIB THIS IS (libname).so
 	uint64_t waiting_limit_seconds;	//FOR A LIMITED TIME. 0 FOR UNLIMITED
 	void* android_app_struct_ptr;	//ON ANDROID THIS IS struct android_app*
-};
+	};
 You need to use this struct.
 
 	int md_get_update(struct mdBroadcast* bs);
