@@ -39,6 +39,8 @@ char* android_native_lib_loc = NULL;
 int android_tmp_val = 0;
 #define MOW_SKIP_HASH 1
 #define printf(...) __android_log_print(ANDROID_LOG_DEBUG, "MOW", __VA_ARGS__);
+#else
+#define MOW_SKIP_HASH 0
 #endif
 
 //GENERAL DEFINES HERE
@@ -375,7 +377,7 @@ int md_get_update(struct mdBroadcast* bs) {
 		struct mowadapter* tadapter = cleanAdapters;
 		for (int i = 0; i < adapter_count; i++)
 		{
-			bsockets[i] = msocket(MOW_IP4, MOW_UDP, MOW_LISTEN, tadapter->h_address, MOWBROADCASTPORT);
+			bsockets[i] = msocket(MOW_IP4, MOW_UDP, MOW_LISTEN, tadapter->h_broadcast, MOWBROADCASTPORT);
 			if (NULL == bsockets[i]) {
 				printf("md_get_update can't create socket %s %d\n", __FILE__, __LINE__);
 				goto MD_GET_UPDATE_RETURN;
@@ -691,10 +693,13 @@ MD_GET_UPDATE_ACTION:
 						printf("Error on distributor main_folder_path length. Should be %llu but %llu\n", tmp_val, distributor_main_folder_path_length);
 					}
 				}
-				relative_folder_path = t_name + distributor_main_folder_path_length + 1;	//+1 FOR FILE DELIMITER
+				relative_folder_path = t_name + distributor_main_folder_path_length;
+				if (M_OS_DELIMITER_CHAR == t_name[distributor_main_folder_path_length - 1] || M_OS_FALSE_DELIMITER_CHAR == t_name[distributor_main_folder_path_length - 1]) {
+					relative_folder_path++;	//+1 FOR FILE DELIMITER
+				}
 				if (abs_folder_path) free(abs_folder_path);
 				//HANDLE THIS TEMPORARY FIXED ALLOCATION
-				abs_folder_path = (char*)calloc(strlen(relative_folder_path) + 2 + ((t_abs_update_location) ? strlen(t_abs_update_location) : strlen(bs->update_location)), sizeof(char)); //todo(kerem): HANDLE THIS TEMPORARY FIX //HANDLED?
+				abs_folder_path = (char*)calloc(strlen(relative_folder_path) + 3 + ((NULL != t_abs_update_location) ? strlen(t_abs_update_location) : strlen(bs->update_location)), sizeof(char)); //todo(kerem): HANDLE THIS TEMPORARY FIX //HANDLED?
 				if (NULL == abs_folder_path) {	//todo(kerem): HANDLE ERROR
 
 				}
@@ -750,8 +755,8 @@ MD_GET_UPDATE_ACTION:
 				if (NULL != current_file) {//CAN CHECK THE HASH VALUES BUT WE ARE SURE THAT SIZES ARE SAME
 					//CALCULATE THE HASH OF THE FILE CONTENT AND SEND HASH VALUE
 					XXH128_hash_t hash = { 0 };
-#if (MOW_SKIP_HASH == 0)
-					XXH128(current_file->content, current_file->content_length, 13);
+#if !defined(MOW_SKIP_HASH) || (MOW_SKIP_HASH == 0)
+					hash = XXH128(current_file->content, current_file->content_length, 13);
 #endif
 					hash.high64 = hton64_t(hash.high64);
 					hash.low64 = hton64_t(hash.low64);
@@ -781,6 +786,7 @@ MD_GET_UPDATE_ACTION:
 						else {
 							printf("%s file written\n", current_file->file_name);
 						}
+						m_free_file(current_file);	//HANDLE RETURN VALUE
 						goto MD_GET_UPDATE_NEXT;
 					}
 					else {

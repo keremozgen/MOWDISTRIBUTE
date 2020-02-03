@@ -48,7 +48,7 @@ void android_main(struct android_app* app) {
 	else {
 		printf("Not\n");
 	}
-	
+
 	JavaVM* vm = app->activity->vm;
 	JNIEnv* env = app->activity->env;
 	(*vm)->AttachCurrentThread(vm, &env, NULL);
@@ -81,7 +81,7 @@ void android_main(struct android_app* app) {
 	jclass jWMMLClass = (*env)->FindClass(env, "android/net/wifi/WifiManager$MulticastLock");
 	jtmID = (*env)->GetMethodID(env, jWMClass, "createMulticastLock", "(Ljava/lang/String;)Landroid/net/wifi/WifiManager$MulticastLock;");
 	jobject jMCObj = (*env)->CallObjectMethod(env, jSystemService, jtmID, wifiLockjStr);
-	
+
 	jtmID = (*env)->GetMethodID(env, jWMMLClass, "setReferenceCounted", "(Z)V");
 	(*env)->CallVoidMethod(env, jMCObj, jtmID, 0);
 
@@ -160,7 +160,7 @@ void android_main(struct android_app* app) {
 		(*env)->ExceptionDescribe(env);
 		(*env)->ExceptionClear(env);
 	}
-	
+
 
 	printf("Printing info\n");
 	printf("internalDataPath: %s\nexternalDataPath: %s\n", activity->internalDataPath, activity->externalDataPath);
@@ -258,7 +258,7 @@ void android_main(struct android_app* app) {
 	}
 	*/
 	/*
-		
+
 	*/
 
 
@@ -307,11 +307,11 @@ int main(int argc, char* argv[]) {
 	bs.message = "DENEME";
 	bs.message_len = strlen(bs.message);
 	bs.cond = &k;
-	
+
 
 #if defined(_WIN32)
 	bs.action = MD_DISTRIBUTE;
-	bs.waiting_limit_seconds = 6;
+	bs.waiting_limit_seconds = 4;
 	bs.broadcast_interval_ms = 1000;
 #ifdef _WIN32
 	bs.update_location = "D:\\PROJECTS\\MOWDISTRIBUTE";	//////
@@ -329,19 +329,19 @@ int main(int argc, char* argv[]) {
 	bs.waiting_limit_seconds = 0;
 #ifdef __ANDROID__
 	bs.android_app_struct_ptr = app;
-	#if 1
+#if 1
 	bs.update_location = android_update;//activity->internalDataPath;
 	//todo(KEREM): HANDLE ALLOCS
-	#else
-		char* android_update_location = (char*)calloc(strlen(activity->externalDataPath) + strlen("/mowdistribute") + 1, sizeof(char));
-		memcpy(android_update_location, activity->externalDataPath, strlen(activity->externalDataPath));
-		android_update_location[strlen(activity->externalDataPath)] = M_OS_DELIMITER_CHAR;
-		memcpy(android_update_location + strlen(activity->externalDataPath), "/mowdistribute", strlen("/mowdistribute"));
-		printf("Android update location: %s\n", android_update_location);
-		bs.update_location = android_update_location;
-	#endif
 #else
-	bs.update_location = "../../../DENEME11";
+	char* android_update_location = (char*)calloc(strlen(activity->externalDataPath) + strlen("/mowdistribute") + 1, sizeof(char));
+	memcpy(android_update_location, activity->externalDataPath, strlen(activity->externalDataPath));
+	android_update_location[strlen(activity->externalDataPath)] = M_OS_DELIMITER_CHAR;
+	memcpy(android_update_location + strlen(activity->externalDataPath), "/mowdistribute", strlen("/mowdistribute"));
+	printf("Android update location: %s\n", android_update_location);
+	bs.update_location = android_update_location;
+#endif
+#else
+	bs.update_location = "/home/hp/MOWDISTRIBUTE";
 #endif
 #endif
 	printf("Starting md_get_update\n");
@@ -385,6 +385,7 @@ int main(int argc, char* argv[]) {
 		printf("Running the binary\n");
 
 
+#if 0
 
 #ifdef _WIN32
 		fcloseall();
@@ -399,6 +400,8 @@ int main(int argc, char* argv[]) {
 			printf("ERROR: %s\n", strerror(errno));
 
 		}
+#endif
+
 #endif
 
 #endif
